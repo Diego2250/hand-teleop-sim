@@ -263,49 +263,62 @@ def print_sweep(rows, title):
               f" {at('jitter', r['filter_lag']):.2f} -> {r['jitter']:.2f} mm   ({label(r)})")
 
 
+PLOT_MAX_LAG_MS = 320
+PLOT_LABELED = ((0.5, 30), (0.5, 10))  # combinaciones de One Euro con etiqueta en la gráfica
+
+
 def plot_sweep(rows, path, title):
-    """Dos paneles con el mismo eje x (retraso del filtro): lo que se gana (temblor) y lo que se paga (error)."""
+    """Temblor y jitter contra el retraso del filtro: EMA (línea) y One Euro (todas las combinaciones y su frontera)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     surface, ink, ink2, grid = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
-    blue, orange, aqua = "#2a78d6", "#eb6834", "#1baf7a"  # paleta de referencia de la skill dataviz, slots 1 a 3
+    blue, orange = "#2a78d6", "#eb6834"  # paleta de referencia de la skill dataviz, slots 1 y 2
     plt.rcParams.update({"font.size": 10, "text.color": ink, "axes.labelcolor": ink2,
                          "xtick.color": ink2, "ytick.color": ink2, "axes.edgecolor": grid})
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.4), dpi=150, facecolor=surface)
-    lag = [r["filter_lag"] for r in rows]
+
+    visible = lambda rs: [r for r in rs if r["filter_lag"] <= PLOT_MAX_LAG_MS]  # noqa: E731
+    base = [r for r in rows if r["filter"] == "none"]
+    euro = [r for r in rows if r["filter"] == "oneeuro"]
+    ema = visible(sorted(base + [r for r in rows if r["filter"] == "ema"], key=lambda r: r["filter_lag"]))
+    front = visible(frontier(base + euro))
+    ms_per_mm = np.polyfit([r["filter_lag"] for r in ema], [r["err_follow"] for r in ema], 1)[0] * 10
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), dpi=150, facecolor=surface)
     line = dict(linewidth=1.0, marker="o", markersize=4.5, markeredgecolor=surface, markeredgewidth=1.0)
+    panels = (("tremor", "Temblor con la mano quieta (ventana de 1 s)"), ("jitter", "Jitter frame a frame con la mano quieta"))
+    for ax, (key, heading) in zip(axes, panels):
+        xs = lambda rs: [r["filter_lag"] for r in rs]  # noqa: E731
+        ys = lambda rs: [r[key] for r in rs]  # noqa: E731
+        ax.scatter(xs(visible(euro)), ys(visible(euro)), s=14, color=orange, alpha=0.3, linewidths=0,
+                   label="One Euro, todas las combinaciones")
+        ax.plot(xs(ema), ys(ema), color=blue, label="EMA", **line)
+        ax.plot(xs(front), ys(front), color=orange, label="One Euro, frontera", **line)
 
-    ax1.plot(lag, [r["tremor"] for r in rows], color=blue, label="Temblor (ventana de 1 s)", **line)
-    ax1.plot(lag, [r["jitter"] for r in rows], color=orange, label="Jitter (frame a frame)", **line)
-    ax2.plot(lag, [r["err_follow"] for r in rows], color=aqua, **line)
+        note = dict(textcoords="offset points", color=ink2, fontsize=8)
+        ax.annotate("sin filtro", (0, base[0][key]), xytext=(6, 6), **note)
+        ax.annotate("EMA", (ema[-1]["filter_lag"], ema[-1][key]), xytext=(6, 2), textcoords="offset points", color=ink, fontsize=9)
+        ax.annotate("One Euro", (front[-1]["filter_lag"], front[-1][key]), xytext=(6, -10), textcoords="offset points",
+                    color=ink, fontsize=9)
+        for r in front if key == "tremor" else []:  # solo en el primer panel, para no encimar etiquetas
+            if (r.get("min_cutoff"), r.get("beta")) in PLOT_LABELED:
+                ax.annotate(f"fc={r['min_cutoff']:g} Hz, β={r['beta']:g}", (r["filter_lag"], r[key]), xytext=(4, -12), **note)
 
-    for r in rows:  # etiquetas selectivas: línea base y algunos tau
-        if r["filter"] == "none" or r.get("tau_ms") in (33, 100, 300):
-            name = "sin filtro" if r["filter"] == "none" else f"τ={r['tau_ms']:g} ms"
-            ax1.annotate(name, (r["filter_lag"], r["tremor"]), xytext=(4, 6), textcoords="offset points", color=ink2, fontsize=8)
-            ax2.annotate(name, (r["filter_lag"], r["err_follow"]), xytext=(4, -12), textcoords="offset points", color=ink2, fontsize=8)
-    last = rows[-1]
-    ax1.annotate("temblor", (last["filter_lag"], last["tremor"]), xytext=(6, -3), textcoords="offset points", color=ink, fontsize=9)
-    ax1.annotate("jitter", (last["filter_lag"], last["jitter"]), xytext=(6, -3), textcoords="offset points", color=ink, fontsize=9)
-
-    ax1.set_title("Lo que se gana: menos temblor con la mano quieta", loc="left", fontsize=10, color=ink)
-    ax2.set_title("Lo que se paga: el brazo se queda atrás al moverte", loc="left", fontsize=10, color=ink)
-    ax1.set_ylabel("mm (objetivo del brazo)")
-    ax2.set_ylabel("error de seguimiento en el círculo, mm (mediana)")
-    for ax in (ax1, ax2):
+        ax.set_title(heading, loc="left", fontsize=10, color=ink)
+        ax.set_ylabel("mm (objetivo del brazo)")
+        ax.set_xlabel(f"retraso agregado por el filtro (ms)\nen el círculo, cada 10 ms suman ~{ms_per_mm:.1f} mm de error")
         ax.set_facecolor(surface)
-        ax.set_xlabel("retraso agregado por el filtro (ms)")
         ax.set_ylim(bottom=0)
-        ax.set_xlim(-10, max(lag) * 1.15)
+        ax.set_xlim(-10, PLOT_MAX_LAG_MS * 1.08)
         ax.grid(True, color=grid, linewidth=0.6)
         ax.set_axisbelow(True)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
-    ax1.legend(frameon=False, loc="lower left", fontsize=8, labelcolor=ink2)
+    axes[0].legend(frameon=False, loc="lower left", fontsize=8, labelcolor=ink2)
     fig.suptitle(title, x=0.01, ha="left", fontsize=11, color=ink)
-    fig.tight_layout()
+    fig.text(0.01, 0.01, f"No se muestran combinaciones con más de {PLOT_MAX_LAG_MS} ms de retraso.", fontsize=7, color=ink2)
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.savefig(path, facecolor=surface)
     plt.close(fig)
     print(f"\nGráfica guardada en {path}")
@@ -327,8 +340,7 @@ def main():
         rows = run_sweep(session)
         print_sweep(rows, f"Barrido de filtros: {args.session.name}")
         if args.plot:
-            plot_sweep([r for r in rows if r["filter"] != "oneeuro"], args.plot,
-                       f"EMA: temblor contra retraso ({args.session.name}, medias de 3 repeticiones)")
+            plot_sweep(rows, args.plot, f"EMA contra One Euro ({args.session.name}, medias de 3 repeticiones)")
         return
 
     mapped = mapped_targets(session)
