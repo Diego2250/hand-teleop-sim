@@ -19,6 +19,8 @@ Métricas por repetición:
         para filtros cuya salida es una copia atrasada de la entrada (EMA, One Euro); el Kalman se pasa y
         deforma, por eso los filtros se comparan contra el error de seguimiento.
     retraso captura->punta: desfase que mejor alinea la punta con el objetivo crudo en tiempo de captura.
+    asentamiento y sobrepaso (fase saltos): tras cada salto del punto guía, cuánto tarda la punta en quedar a
+        menos de TOL_MM de la posición final de la mano, y cuánto se pasa de ella en la dirección del salto.
 """
 import argparse
 import sys
@@ -46,7 +48,9 @@ SWEEP = ([("none", {})]
          + [("ema", {"tau_ms": tau}) for tau in EMA_TAUS]
          + [("oneeuro", {"min_cutoff": fc, "beta": b}) for fc in ONEEURO_CUTOFFS for b in ONEEURO_BETAS]
          + [("kalman", {"accel": a}) for a in KALMAN_ACCELS])
-PHASE_NAMES = {1: "quieta", 2: "seguir", 3: "profundidad"}
+TOL_MM = 5.0         # tolerancia del asentamiento
+HOLD_S = 0.7         # la posición final de la mano en cada salto es la mediana de este último tramo
+PHASE_NAMES = {1: "quieta", 2: "seguir", 3: "profundidad", 4: "saltos"}
 AXES = ("prof", "lat", "vert")  # x, y, z del brazo
 
 
@@ -67,6 +71,7 @@ def load_session(path):
         "phase": d[:, c["phase"]].astype(int),
         "rec": d[:, c["rec"]].astype(int),
         "t_phase": d[:, c["t_phase_ms"]],
+        "guide": d[:, [c["gu"], c["gv"]]],
         "msgs": msgs,
     }
 
@@ -129,6 +134,42 @@ def estimate_filter_lag(t, raw, cmd, mask, max_lag_ms=MAX_LAG_MS, max_lead_ms=MA
     return shifts[int(np.argmin(mse))]
 
 
+def settle_and_overshoot(times, pos, t0, t1, final, direction):
+    """Asentamiento (ms desde t0; t1 - t0 si no se asienta) y sobrepaso (mm) de una trayectoria tras un salto."""
+    dist = np.linalg.norm(pos - final, axis=1) * 1000
+    outside = np.flatnonzero(dist > TOL_MM)
+    if not len(outside):
+        settle = 0.0
+    elif outside[-1] + 1 < len(times):
+        settle = float(times[outside[-1] + 1] - t0)
+    else:
+        settle = float(t1 - t0)
+    overshoot = max(0.0, float(np.max((pos - final) @ direction)) * 1000)
+    return settle, overshoot
+
+
+def jump_metrics(session, raw, t_sim, tip, win):
+    """Medianas de asentamiento y sobrepaso sobre los saltos del punto guía dentro de win, para la punta y la mano."""
+    t, guide = session["t"], session["guide"]
+    idx = np.flatnonzero(win)
+    jumps = [idx[k + 1] for k in range(len(idx) - 1) if np.any(guide[idx[k + 1]] != guide[idx[k]])]
+    ends = [t[j] for j in jumps[1:]] + [t[idx[-1]]]
+    out = {"settle_tip_ms": [], "overshoot_tip_mm": [], "settle_hand_ms": [], "overshoot_hand_mm": []}
+    for j, t1 in zip(jumps, ends):
+        t0 = t[j]
+        start = np.median(raw[(t >= t0 - 300) & (t < t0)], axis=0)
+        final = np.median(raw[(t >= t1 - HOLD_S * 1000) & (t <= t1)], axis=0)
+        direction = (final - start) / np.linalg.norm(final - start)
+        arm = (t_sim >= t0) & (t_sim <= t1)
+        hand = np.column_stack([np.interp(t_sim[arm], t, raw[:, a]) for a in range(3)])  # misma rejilla que la punta
+        for who, pos in (("tip", tip[arm]), ("hand", hand)):
+            times = t_sim[arm]
+            settle, overshoot = settle_and_overshoot(times, pos, t0, t1, final, direction)
+            out[f"settle_{who}_ms"].append(settle)
+            out[f"overshoot_{who}_mm"].append(overshoot)
+    return {key: float(np.median(vals)) for key, vals in out.items()} | {"jumps": len(jumps)}
+
+
 def norm3(stds):
     return float(np.sqrt(np.sum(np.square(stds))))
 
@@ -155,6 +196,8 @@ def evaluate(session, raw, commands):
                 row["tremor"] = detrended_std(cmd, fs)
                 row["jitter"] = np.std(np.diff(cmd, axis=0), axis=0) / np.sqrt(2)
                 row["tremor_tip"] = detrended_std(tip[in_msg(steady)] * 1000, 1000 / dt)
+            elif phase == 4:
+                row.update(jump_metrics(session, raw, t_sim, tip, win))
             else:
                 steps = in_msg(win)
                 err = np.linalg.norm(tip[steps] - raw[current[steps]], axis=1) * 1000
@@ -191,13 +234,24 @@ def print_table(results, title):
             print(f"  {PHASE_NAMES[phase]:12s} {'med':>3s} | {mean('err_median'):13.2f} {mean('err_p95'):9.2f} |"
                   f" {mean('filter_lag_ms'):11.0f}    | {mean('lag_ms'):8.0f}")
 
+    jumps = [r for r in results if r["phase"] == 4]
+    if jumps:
+        print(f"\nSaltos (medianas por repetición; asentamiento = quedar a menos de {TOL_MM:g} mm de la posición final)")
+        print(f"  {'rep':>5s} | saltos | asentamiento punta  mano (ms) | sobrepaso punta  mano (mm)")
+        for r in jumps:
+            print(f"  {r['rep']:5d} | {r['jumps']:6d} | {r['settle_tip_ms']:18.0f} {r['settle_hand_ms']:5.0f}      |"
+                  f" {r['overshoot_tip_mm']:15.1f} {r['overshoot_hand_mm']:5.1f}")
+
 
 def summarize(results):
     """Una fila por configuración de filtro: medias sobre las repeticiones."""
     by_phase = lambda phase: [r for r in results if r["phase"] == phase]  # noqa: E731
     mean = lambda phase, key: float(np.mean([r[key] for r in by_phase(phase)], axis=0))  # noqa: E731
     still = by_phase(1)
-    return {
+    extra = {}
+    if by_phase(4):
+        extra = {"settle": mean(4, "settle_tip_ms"), "overshoot": mean(4, "overshoot_tip_mm")}
+    return extra | {
         "tremor": norm3(np.mean([r["tremor"] for r in still], axis=0)),
         "tremor_prof": float(np.mean([r["tremor"][0] for r in still])),
         "jitter": norm3(np.mean([r["jitter"] for r in still], axis=0)),
@@ -243,11 +297,15 @@ def frontier(rows, cost="err_follow"):
 
 
 def print_rows(rows):
-    print(f"  {'filtro':21s} | temblor 3D (prof) | jitter 3D | retraso filtro | captura->punta | error círculo  prof.")
-    print(f"  {'':21s} | {'mm':>17s} | {'mm':>9s} | {'ms':>14s} | {'ms':>14s} | {'mm':>13s} {'mm':>6s}")
+    jumps = "settle" in rows[0]
+    print(f"  {'filtro':21s} | temblor 3D (prof) | jitter 3D | retraso filtro | captura->punta | error círculo  prof."
+          + (" | asentam. sobrepaso" if jumps else ""))
+    print(f"  {'':21s} | {'mm':>17s} | {'mm':>9s} | {'ms':>14s} | {'ms':>14s} | {'mm':>13s} {'mm':>6s}"
+          + (f" | {'ms':>8s} {'mm':>9s}" if jumps else ""))
     for r in rows:
         print(f"  {label(r):21s} | {r['tremor']:10.2f} ({r['tremor_prof']:4.2f}) | {r['jitter']:9.2f} |"
-              f" {r['filter_lag']:14.0f} | {r['lag']:14.0f} | {r['err_follow']:13.2f} {r['err_depth']:6.2f}")
+              f" {r['filter_lag']:14.0f} | {r['lag']:14.0f} | {r['err_follow']:13.2f} {r['err_depth']:6.2f}"
+              + (f" | {r['settle']:8.0f} {r['overshoot']:9.1f}" if jumps else ""))
 
 
 def print_sweep(rows, title):
