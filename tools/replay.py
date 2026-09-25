@@ -3,6 +3,7 @@
 Uso:
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv                      # línea base, tabla detallada
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter ema --tau 100
+    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter oneeuro --min-cutoff 1 --beta 30
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --sweep              # barrido de filtros, tabla resumen
 
 Camino: landmarks -> hand_msg (handDetector) -> hand_to_target -> filtro -> clamp_reach -> IK + MuJoCo (armSim).
@@ -31,8 +32,13 @@ from handDetector import hand_msg  # noqa: E402
 
 SETTLE_S = 3.0       # se descarta el inicio de la fase quieta: la mano todavía está llegando
 DETREND_S = 1.0      # ventana de la media móvil que separa la deriva lenta del temblor
-MAX_LAG_MS = 400
-SWEEP = [("none", {})] + [("ema", {"tau_ms": tau}) for tau in (10, 20, 33, 50, 75, 100, 150, 200, 300)]
+MAX_LAG_MS = 800
+EMA_TAUS = (10, 20, 33, 50, 75, 100, 150, 200, 300)
+ONEEURO_CUTOFFS = (0.2, 0.3, 0.5, 1, 2, 4, 8)
+ONEEURO_BETAS = (0, 3, 10, 30, 100, 300, 1000)
+SWEEP = ([("none", {})]
+         + [("ema", {"tau_ms": tau}) for tau in EMA_TAUS]
+         + [("oneeuro", {"min_cutoff": fc, "beta": b}) for fc in ONEEURO_CUTOFFS for b in ONEEURO_BETAS])
 PHASE_NAMES = {1: "quieta", 2: "seguir", 3: "profundidad"}
 AXES = ("prof", "lat", "vert")  # x, y, z del brazo
 
@@ -198,23 +204,63 @@ def run_sweep(session):
     mapped = mapped_targets(session)
     raw = commands_for(session, mapped, filters.NoFilter())
     rows = []
-    for name, params in SWEEP:
+    for i, (name, params) in enumerate(SWEEP, 1):
+        print(f"  simulando {i}/{len(SWEEP)}", end="\r", file=sys.stderr)
         cmd = commands_for(session, mapped, filters.make_filter(name, **params))
         rows.append({"filter": name, **params, **summarize(evaluate(session, raw, cmd))})
     return rows
 
 
 def label(row):
-    return "sin filtro" if row["filter"] == "none" else f"EMA tau={row['tau_ms']:g} ms"
+    if row["filter"] == "ema":
+        return f"EMA tau={row['tau_ms']:g} ms"
+    if row["filter"] == "oneeuro":
+        return f"1€ fc={row['min_cutoff']:g} Hz β={row['beta']:g}"
+    return "sin filtro"
+
+
+def frontier(rows):
+    """Configuraciones que nadie supera: para su retraso, ninguna otra deja menos temblor."""
+    best, out = float("inf"), []
+    for r in sorted(rows, key=lambda r: (r["filter_lag"], r["tremor"])):
+        if r["tremor"] < best:
+            best = r["tremor"]
+            out.append(r)
+    return out
+
+
+def print_rows(rows):
+    print(f"  {'filtro':21s} | temblor 3D (prof) | jitter 3D | retraso filtro | captura->punta | error círculo  prof.")
+    print(f"  {'':21s} | {'mm':>17s} | {'mm':>9s} | {'ms':>14s} | {'ms':>14s} | {'mm':>13s} {'mm':>6s}")
+    for r in rows:
+        print(f"  {label(r):21s} | {r['tremor']:10.2f} ({r['tremor_prof']:4.2f}) | {r['jitter']:9.2f} |"
+              f" {r['filter_lag']:14.0f} | {r['lag']:14.0f} | {r['err_follow']:13.2f} {r['err_depth']:6.2f}")
 
 
 def print_sweep(rows, title):
+    base = [r for r in rows if r["filter"] == "none"]
+    ema = base + [r for r in rows if r["filter"] == "ema"]
+    euro = [r for r in rows if r["filter"] == "oneeuro"]
     print(f"\n{title}  (medias de las 3 repeticiones)")
-    print(f"  {'filtro':17s} | temblor 3D (prof) | jitter 3D | retraso filtro | captura->punta | error círculo  prof.")
-    print(f"  {'':17s} | {'mm':>17s} | {'mm':>9s} | {'ms':>14s} | {'ms':>14s} | {'mm':>13s} {'mm':>6s}")
-    for r in rows:
-        print(f"  {label(r):17s} | {r['tremor']:10.2f} ({r['tremor_prof']:4.2f}) | {r['jitter']:9.2f} |"
-              f" {r['filter_lag']:14.0f} | {r['lag']:14.0f} | {r['err_follow']:13.2f} {r['err_depth']:6.2f}")
+    print("\nEMA")
+    print_rows(ema)
+    if not euro:
+        return
+    print(f"\nOne Euro: frontera de {len(euro)} combinaciones (fc en {ONEEURO_CUTOFFS} Hz, β en {ONEEURO_BETAS})")
+    front = frontier(base + euro)
+    print_rows(front)
+
+    ema_sorted = sorted(ema, key=lambda r: r["filter_lag"])
+    lags = [r["filter_lag"] for r in ema_sorted]
+    at = lambda key, lag: float(np.interp(lag, lags, [r[key] for r in ema_sorted]))  # noqa: E731
+    print("\nCon el mismo retraso del filtro, temblor que deja cada uno (EMA interpolada)")
+    print(f"  {'retraso':>7s} | {'EMA':>7s} | {'One Euro':>8s} | cambio | jitter EMA -> One Euro")
+    for r in front:
+        if r["filter"] != "oneeuro" or r["filter_lag"] > lags[-1]:
+            continue
+        e = at("tremor", r["filter_lag"])
+        print(f"  {r['filter_lag']:4.0f} ms | {e:4.2f} mm | {r['tremor']:5.2f} mm | {100 * (r['tremor'] - e) / e:+5.0f}% |"
+              f" {at('jitter', r['filter_lag']):.2f} -> {r['jitter']:.2f} mm   ({label(r)})")
 
 
 def plot_sweep(rows, path, title):
@@ -269,8 +315,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("session", type=Path, help="CSV grabado con tools/record_session.py")
     parser.add_argument("--filter", choices=filters.FILTERS, default="none")
-    parser.add_argument("--tau", type=float, default=100.0, help="constante de tiempo de la EMA en ms")
-    parser.add_argument("--sweep", action="store_true", help="prueba sin filtro y EMA con varios tau")
+    parser.add_argument("--tau", type=float, default=100.0, help="EMA: constante de tiempo en ms")
+    parser.add_argument("--min-cutoff", type=float, default=1.0, help="One Euro: corte con la mano quieta, Hz")
+    parser.add_argument("--beta", type=float, default=30.0, help="One Euro: aumento del corte por m/s, Hz")
+    parser.add_argument("--sweep", action="store_true", help="prueba sin filtro, EMA y One Euro con varios parámetros")
     parser.add_argument("--plot", type=Path, help="con --sweep, guarda la gráfica en este PNG")
     args = parser.parse_args()
 
@@ -279,14 +327,16 @@ def main():
         rows = run_sweep(session)
         print_sweep(rows, f"Barrido de filtros: {args.session.name}")
         if args.plot:
-            plot_sweep(rows, args.plot, f"EMA: temblor contra retraso ({args.session.name}, medias de 3 repeticiones)")
+            plot_sweep([r for r in rows if r["filter"] != "oneeuro"], args.plot,
+                       f"EMA: temblor contra retraso ({args.session.name}, medias de 3 repeticiones)")
         return
 
     mapped = mapped_targets(session)
     raw = commands_for(session, mapped, filters.NoFilter())
-    params = {"tau_ms": args.tau} if args.filter == "ema" else {}
+    params = {"none": {}, "ema": {"tau_ms": args.tau},
+              "oneeuro": {"min_cutoff": args.min_cutoff, "beta": args.beta}}[args.filter]
     cmd = commands_for(session, mapped, filters.make_filter(args.filter, **params))
-    title = "Línea base (sin filtro)" if args.filter == "none" else f"EMA tau={args.tau:g} ms"
+    title = "Línea base (sin filtro)" if args.filter == "none" else label({"filter": args.filter, **params})
     print_table(evaluate(session, raw, cmd), f"{title}: {args.session.name}")
 
 
