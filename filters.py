@@ -74,7 +74,42 @@ class OneEuro:
         return self.x.copy()
 
 
-FILTERS = {"none": NoFilter, "ema": EMA, "oneeuro": OneEuro}
+class Kalman:
+    """Filtro de Kalman con modelo de velocidad constante, aplicado a cada eje por separado.
+
+    Estado por eje: posición y velocidad. Entre mediciones predice que la mano sigue a la misma velocidad,
+    con incertidumbre por aceleración aleatoria de desviación accel (m/s²: qué tan brusco puede ser el
+    movimiento). Corrige con cada medición suponiendo un ruido de desviación noise_mm. En régimen estable
+    solo importa la proporción entre las dos. A diferencia de la EMA, sigue una velocidad constante sin retraso.
+    """
+
+    def __init__(self, accel, noise_mm=1.0):
+        self.q = accel ** 2
+        self.r = (noise_mm / 1000) ** 2
+        self.x = None  # (2, 3): fila 0 posición, fila 1 velocidad, una columna por eje
+        self.P = None  # covarianza 2x2, igual para los tres ejes (mismo modelo y mismas mediciones)
+        self.t = None
+
+    def update(self, z, t):
+        z = np.array(z, dtype=float)
+        if self.x is None:
+            self.x = np.vstack([z, np.zeros(3)])
+            self.P = np.diag([self.r, 1.0])  # velocidad inicial desconocida
+            self.t = t
+            return z.copy()
+        dt = max(t - self.t, 1e-6)
+        F = np.array([[1.0, dt], [0.0, 1.0]])
+        Q = self.q * np.array([[dt ** 4 / 4, dt ** 3 / 2], [dt ** 3 / 2, dt ** 2]])
+        self.x = F @ self.x                        # predicción
+        self.P = F @ self.P @ F.T + Q
+        k = self.P[:, 0] / (self.P[0, 0] + self.r)  # ganancia de Kalman: cuánto creerle a la medición
+        self.x = self.x + np.outer(k, z - self.x[0])  # corrección
+        self.P = self.P - np.outer(k, self.P[0])
+        self.t = t
+        return self.x[0].copy()
+
+
+FILTERS = {"none": NoFilter, "ema": EMA, "oneeuro": OneEuro, "kalman": Kalman}
 
 
 def make_filter(name, **params):
