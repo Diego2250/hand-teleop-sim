@@ -280,61 +280,62 @@ def print_sweep(rows, title):
         print(f"  {err:4g} mm | " + " | ".join(cells))
 
 
-PLOT_MAX_LAG_MS = 320
+PLOT_MAX_ERR_MM = 40
 PLOT_LABELED = ((0.5, 30), (0.5, 10))  # combinaciones de One Euro con etiqueta en la gráfica
 
 
 def plot_sweep(rows, path, title):
-    """Temblor y jitter contra el retraso del filtro: EMA (línea) y One Euro (todas las combinaciones y su frontera)."""
+    """Temblor y jitter contra el error de seguimiento: EMA y Kalman (líneas) y One Euro (todas y su frontera)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     surface, ink, ink2, grid = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
-    blue, orange = "#2a78d6", "#eb6834"  # paleta de referencia de la skill dataviz, slots 1 y 2
+    blue, orange, aqua = "#2a78d6", "#eb6834", "#1baf7a"  # paleta de referencia de la skill dataviz, slots 1 a 3
     plt.rcParams.update({"font.size": 10, "text.color": ink, "axes.labelcolor": ink2,
                          "xtick.color": ink2, "ytick.color": ink2, "axes.edgecolor": grid})
 
-    visible = lambda rs: [r for r in rs if r["filter_lag"] <= PLOT_MAX_LAG_MS]  # noqa: E731
+    visible = lambda rs: [r for r in rs if r["err_follow"] <= PLOT_MAX_ERR_MM]  # noqa: E731
+    by_err = lambda rs: sorted(rs, key=lambda r: r["err_follow"])  # noqa: E731
     base = [r for r in rows if r["filter"] == "none"]
-    euro = [r for r in rows if r["filter"] == "oneeuro"]
-    ema = visible(sorted(base + [r for r in rows if r["filter"] == "ema"], key=lambda r: r["filter_lag"]))
-    front = visible(frontier(base + euro, cost="filter_lag"))
-    ms_per_mm = np.polyfit([r["filter_lag"] for r in ema], [r["err_follow"] for r in ema], 1)[0] * 10
+    group = lambda name: [r for r in rows if r["filter"] == name]  # noqa: E731
+    ema, kalman = visible(by_err(base + group("ema"))), visible(by_err(base + group("kalman")))
+    euro, front = visible(group("oneeuro")), visible(frontier(base + group("oneeuro")))
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), dpi=150, facecolor=surface)
     line = dict(linewidth=1.0, marker="o", markersize=4.5, markeredgecolor=surface, markeredgewidth=1.0)
     panels = (("tremor", "Temblor con la mano quieta (ventana de 1 s)"), ("jitter", "Jitter frame a frame con la mano quieta"))
     for ax, (key, heading) in zip(axes, panels):
-        xs = lambda rs: [r["filter_lag"] for r in rs]  # noqa: E731
+        xs = lambda rs: [r["err_follow"] for r in rs]  # noqa: E731
         ys = lambda rs: [r[key] for r in rs]  # noqa: E731
-        ax.scatter(xs(visible(euro)), ys(visible(euro)), s=14, color=orange, alpha=0.3, linewidths=0,
-                   label="One Euro, todas las combinaciones")
+        ax.scatter(xs(euro), ys(euro), s=14, color=orange, alpha=0.3, linewidths=0, label="One Euro, todas las combinaciones")
         ax.plot(xs(ema), ys(ema), color=blue, label="EMA", **line)
+        ax.plot(xs(kalman), ys(kalman), color=aqua, label="Kalman (velocidad constante)", **line)
         ax.plot(xs(front), ys(front), color=orange, label="One Euro, frontera", **line)
 
         note = dict(textcoords="offset points", color=ink2, fontsize=8)
-        ax.annotate("sin filtro", (0, base[0][key]), xytext=(6, 6), **note)
-        ax.annotate("EMA", (ema[-1]["filter_lag"], ema[-1][key]), xytext=(6, 2), textcoords="offset points", color=ink, fontsize=9)
-        ax.annotate("One Euro", (front[-1]["filter_lag"], front[-1][key]), xytext=(6, -10), textcoords="offset points",
-                    color=ink, fontsize=9)
+        name = dict(textcoords="offset points", color=ink, fontsize=9)
+        ax.annotate("sin filtro", (base[0]["err_follow"], base[0][key]), xytext=(-8, 8), **note)
+        for rs, text, offset in ((ema, "EMA", (6, 2)), (kalman, "Kalman", (6, -4)), (front, "One Euro", (6, -10))):
+            ax.annotate(text, (rs[-1]["err_follow"], rs[-1][key]), xytext=offset, **name)
         for r in front if key == "tremor" else []:  # solo en el primer panel, para no encimar etiquetas
             if (r.get("min_cutoff"), r.get("beta")) in PLOT_LABELED:
-                ax.annotate(f"fc={r['min_cutoff']:g} Hz, β={r['beta']:g}", (r["filter_lag"], r[key]), xytext=(4, -12), **note)
+                ax.annotate(f"fc={r['min_cutoff']:g} Hz, β={r['beta']:g}", (r["err_follow"], r[key]), xytext=(4, -12), **note)
 
         ax.set_title(heading, loc="left", fontsize=10, color=ink)
         ax.set_ylabel("mm (objetivo del brazo)")
-        ax.set_xlabel(f"retraso agregado por el filtro (ms)\nen el círculo, cada 10 ms suman ~{ms_per_mm:.1f} mm de error")
+        ax.set_xlabel("error de seguimiento al moverse en el círculo (mm, mediana)")
         ax.set_facecolor(surface)
         ax.set_ylim(bottom=0)
-        ax.set_xlim(-10, PLOT_MAX_LAG_MS * 1.08)
+        ax.set_xlim(0, PLOT_MAX_ERR_MM * 1.12)
         ax.grid(True, color=grid, linewidth=0.6)
         ax.set_axisbelow(True)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
     axes[0].legend(frameon=False, loc="lower left", fontsize=8, labelcolor=ink2)
     fig.suptitle(title, x=0.01, ha="left", fontsize=11, color=ink)
-    fig.text(0.01, 0.01, f"No se muestran combinaciones con más de {PLOT_MAX_LAG_MS} ms de retraso.", fontsize=7, color=ink2)
+    fig.text(0.01, 0.01, f"No se muestran configuraciones con más de {PLOT_MAX_ERR_MM} mm de error. Más abajo y más a la izquierda es mejor.",
+             fontsize=7, color=ink2)
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     fig.savefig(path, facecolor=surface)
     plt.close(fig)
@@ -359,7 +360,7 @@ def main():
         rows = run_sweep(session)
         print_sweep(rows, f"Barrido de filtros: {args.session.name}")
         if args.plot:
-            plot_sweep(rows, args.plot, f"EMA contra One Euro ({args.session.name}, medias de 3 repeticiones)")
+            plot_sweep(rows, args.plot, f"EMA, Kalman y One Euro ({args.session.name}, medias de 3 repeticiones)")
         return
 
     mapped = mapped_targets(session)
