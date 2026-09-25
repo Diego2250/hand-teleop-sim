@@ -21,8 +21,6 @@ HAND_CONNECTIONS = [
     (5, 9), (9, 13), (13, 17),             # palma
 ]
 
-latest_annotated_frame = None
-
 lock = threading.Lock()
 latest = {"frame": None, "landmarks": None, "world": None, "ts": None, "latency_ms": None}
 
@@ -65,19 +63,6 @@ def send_hand(landmarks, world, ts, w, h):
     scale = math.hypot(palm.x - wrist.x, palm.y - wrist.y)
     msg = {"u": palm.x, "v": palm.y, "s": scale, "d": palm_scale(landmarks, world, w, h), "ts": ts}
     sock.sendto(json.dumps(msg).encode(), UDP_ADDR)
-
-def print_result(result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
-    global latest_annotated_frame
-
-    
-    if result.hand_landmarks:
-        annotated = draw_landmarks_on_image(output_image, result.hand_landmarks)
-    else:
-        
-        annotated = cv2.cvtColor(output_image.numpy_view(), cv2.COLOR_RGB2BGR)
-
-    latest_annotated_frame = annotated
-
 
 def now_ms():
     return time.monotonic_ns() // 1_000_000

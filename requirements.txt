@@ -1,0 +1,7 @@
+# Probado con Python 3.12 en macOS (Apple Silicon).
+# mediapipe 1.0.x aborta en macOS con Delegate.CPU ("Check failed: service_ Service is unavailable"); no subir sin probar.
+# No instalar opencv-python además de opencv-contrib-python: ambos instalan cv2 y se pisan.
+mediapipe==0.10.35
+mujoco==3.14.0
+numpy==2.5.3
+opencv-contrib-python==5.0.0.93

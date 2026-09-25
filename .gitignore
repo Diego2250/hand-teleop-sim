@@ -180,4 +180,8 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 /.idea
-*.xml
+
+# Proyecto: grabaciones crudas y logs de MuJoCo
+data/
+MUJOCO_LOG.TXT
+
