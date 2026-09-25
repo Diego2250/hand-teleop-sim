@@ -1,16 +1,19 @@
 """Reproduce una sesión grabada por el mismo camino que el vivo, sin visor, y mide temblor, retraso y error.
 
 Uso:
-    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv
+    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv                      # línea base, tabla detallada
+    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter ema --tau 100
+    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --sweep              # barrido de filtros, tabla resumen
 
-Camino: landmarks -> hand_msg (handDetector) -> hand_to_target -> clamp_reach -> IK + MuJoCo (armSim).
+Camino: landmarks -> hand_msg (handDetector) -> hand_to_target -> filtro -> clamp_reach -> IK + MuJoCo (armSim).
 Cada mensaje llega al simulador en su tiempo de captura + la latencia de inferencia grabada; entre
 mensajes se mantiene el último objetivo, igual que en vivo. La simulación corre a 500 Hz.
 
 Métricas por repetición:
-    temblor (fase quieta): desviación estándar del objetivo tras quitar la deriva lenta (media móvil de
-        DETREND_S), descartando los primeros SETTLE_S de la ventana. También en la punta del brazo.
-    error de seguimiento (fases seguir y profundidad): distancia punta-objetivo crudo en cada paso.
+    temblor (fase quieta): desviación estándar del objetivo enviado al brazo tras quitar la deriva lenta
+        (media móvil de DETREND_S), descartando los primeros SETTLE_S de la ventana. También en la punta.
+    error de seguimiento (fases seguir y profundidad): distancia punta-objetivo crudo (sin filtro) en cada paso.
+    retraso del filtro: desfase que mejor alinea el objetivo filtrado con el crudo.
     retraso captura->punta: desfase que mejor alinea la punta con el objetivo crudo en tiempo de captura.
 """
 import argparse
@@ -23,11 +26,13 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import armSim  # noqa: E402
+import filters  # noqa: E402
 from handDetector import hand_msg  # noqa: E402
 
 SETTLE_S = 3.0       # se descarta el inicio de la fase quieta: la mano todavía está llegando
 DETREND_S = 1.0      # ventana de la media móvil que separa la deriva lenta del temblor
 MAX_LAG_MS = 400
+SWEEP = [("none", {})] + [("ema", {"tau_ms": tau}) for tau in (10, 20, 33, 50, 75, 100, 150, 200, 300)]
 PHASE_NAMES = {1: "quieta", 2: "seguir", 3: "profundidad"}
 AXES = ("prof", "lat", "vert")  # x, y, z del brazo
 
@@ -53,9 +58,19 @@ def load_session(path):
     }
 
 
+def mapped_targets(session):
+    """Objetivo mapeado por mensaje, antes de filtrar y recortar."""
+    return np.array([armSim.hand_to_target(m) for m in session["msgs"]])
+
+
+def commands_for(session, mapped, filt):
+    """Lo que se le manda al brazo por mensaje: filtro sobre el objetivo mapeado y después el recorte de alcance."""
+    return np.array([armSim.clamp_reach(filt.update(z, t / 1000)) for z, t in zip(mapped, session["t"])])
+
+
 def raw_targets(session):
     """Objetivo sin filtro por mensaje, igual que en armSim.main()."""
-    return np.array([armSim.clamp_reach(armSim.hand_to_target(m)) for m in session["msgs"]])
+    return commands_for(session, mapped_targets(session), filters.NoFilter())
 
 
 def simulate(session, commands):
@@ -86,6 +101,18 @@ def estimate_lag(ref, sig, k0, k1, dt, max_lag_ms=MAX_LAG_MS):
     k1 = min(k1, len(sig) - n)
     mse = [np.mean(np.sum((sig[k0 + s:k1 + s] - ref[k0:k1]) ** 2, axis=1)) for s in range(n + 1)]
     return int(np.argmin(mse)) * dt
+
+
+def estimate_filter_lag(t, raw, cmd, mask, max_lag_ms=MAX_LAG_MS):
+    """Retraso (ms, resolución 1 ms) del objetivo filtrado contra el crudo, en los mensajes de mask.
+
+    Compara cmd(t_i) contra raw(t_i - lag) interpolando raw linealmente entre frames: comparar las dos
+    señales en escalera redondea el retraso a múltiplos de un frame (33 ms).
+    """
+    ti, ci = t[mask], cmd[mask]
+    mse = [np.mean(np.sum((ci - np.column_stack([np.interp(ti - s, t, raw[:, a]) for a in range(3)])) ** 2, axis=1))
+           for s in range(max_lag_ms + 1)]
+    return int(np.argmin(mse))
 
 
 def norm3(stds):
@@ -120,6 +147,7 @@ def evaluate(session, raw, commands):
                 row["err_median"], row["err_p95"] = float(np.median(err)), float(np.percentile(err, 95))
                 k = np.flatnonzero(win[ref_idx])
                 row["lag_ms"] = estimate_lag(ref_capture, tip, k[0], k[-1] + 1, dt)
+                row["filter_lag_ms"] = estimate_filter_lag(session["t"], raw, commands, win)
             results.append(row)
     return results
 
@@ -138,24 +166,128 @@ def print_table(results, title):
               f"    {norm3(mean('tremor_tip')):5.2f} |     {norm3(mean('jitter')):5.2f}")
 
     print("\nSeguimiento (punta contra objetivo crudo)")
-    print(f"  {'fase':12s} {'rep':>3s} | error mediana   p95 (mm) | retraso captura->punta (ms)")
+    print(f"  {'fase':12s} {'rep':>3s} | error mediana   p95 (mm) | retraso filtro | retraso captura->punta (ms)")
     for phase in (2, 3):
         rows = [r for r in results if r["phase"] == phase]
         for r in rows:
-            print(f"  {PHASE_NAMES[phase]:12s} {r['rep']:3d} | {r['err_median']:13.2f} {r['err_p95']:9.2f} | {r['lag_ms']:8.0f}")
+            print(f"  {PHASE_NAMES[phase]:12s} {r['rep']:3d} | {r['err_median']:13.2f} {r['err_p95']:9.2f} |"
+                  f" {r['filter_lag_ms']:11.0f}    | {r['lag_ms']:8.0f}")
         if rows:
-            print(f"  {PHASE_NAMES[phase]:12s} {'med':>3s} | {np.mean([r['err_median'] for r in rows]):13.2f}"
-                  f" {np.mean([r['err_p95'] for r in rows]):9.2f} | {np.mean([r['lag_ms'] for r in rows]):8.0f}")
+            mean = lambda key: np.mean([r[key] for r in rows])  # noqa: E731
+            print(f"  {PHASE_NAMES[phase]:12s} {'med':>3s} | {mean('err_median'):13.2f} {mean('err_p95'):9.2f} |"
+                  f" {mean('filter_lag_ms'):11.0f}    | {mean('lag_ms'):8.0f}")
+
+
+def summarize(results):
+    """Una fila por configuración de filtro: medias sobre las repeticiones."""
+    by_phase = lambda phase: [r for r in results if r["phase"] == phase]  # noqa: E731
+    mean = lambda phase, key: float(np.mean([r[key] for r in by_phase(phase)], axis=0))  # noqa: E731
+    still = by_phase(1)
+    return {
+        "tremor": norm3(np.mean([r["tremor"] for r in still], axis=0)),
+        "tremor_prof": float(np.mean([r["tremor"][0] for r in still])),
+        "jitter": norm3(np.mean([r["jitter"] for r in still], axis=0)),
+        "filter_lag": mean(2, "filter_lag_ms"),
+        "lag": mean(2, "lag_ms"),
+        "err_follow": mean(2, "err_median"),
+        "err_depth": mean(3, "err_median"),
+    }
+
+
+def run_sweep(session):
+    mapped = mapped_targets(session)
+    raw = commands_for(session, mapped, filters.NoFilter())
+    rows = []
+    for name, params in SWEEP:
+        cmd = commands_for(session, mapped, filters.make_filter(name, **params))
+        rows.append({"filter": name, **params, **summarize(evaluate(session, raw, cmd))})
+    return rows
+
+
+def label(row):
+    return "sin filtro" if row["filter"] == "none" else f"EMA tau={row['tau_ms']:g} ms"
+
+
+def print_sweep(rows, title):
+    print(f"\n{title}  (medias de las 3 repeticiones)")
+    print(f"  {'filtro':17s} | temblor 3D (prof) | jitter 3D | retraso filtro | captura->punta | error círculo  prof.")
+    print(f"  {'':17s} | {'mm':>17s} | {'mm':>9s} | {'ms':>14s} | {'ms':>14s} | {'mm':>13s} {'mm':>6s}")
+    for r in rows:
+        print(f"  {label(r):17s} | {r['tremor']:10.2f} ({r['tremor_prof']:4.2f}) | {r['jitter']:9.2f} |"
+              f" {r['filter_lag']:14.0f} | {r['lag']:14.0f} | {r['err_follow']:13.2f} {r['err_depth']:6.2f}")
+
+
+def plot_sweep(rows, path, title):
+    """Dos paneles con el mismo eje x (retraso del filtro): lo que se gana (temblor) y lo que se paga (error)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    surface, ink, ink2, grid = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
+    blue, orange, aqua = "#2a78d6", "#eb6834", "#1baf7a"  # paleta de referencia de la skill dataviz, slots 1 a 3
+    plt.rcParams.update({"font.size": 10, "text.color": ink, "axes.labelcolor": ink2,
+                         "xtick.color": ink2, "ytick.color": ink2, "axes.edgecolor": grid})
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.4), dpi=150, facecolor=surface)
+    lag = [r["filter_lag"] for r in rows]
+    line = dict(linewidth=1.0, marker="o", markersize=4.5, markeredgecolor=surface, markeredgewidth=1.0)
+
+    ax1.plot(lag, [r["tremor"] for r in rows], color=blue, label="Temblor (ventana de 1 s)", **line)
+    ax1.plot(lag, [r["jitter"] for r in rows], color=orange, label="Jitter (frame a frame)", **line)
+    ax2.plot(lag, [r["err_follow"] for r in rows], color=aqua, **line)
+
+    for r in rows:  # etiquetas selectivas: línea base y algunos tau
+        if r["filter"] == "none" or r.get("tau_ms") in (33, 100, 300):
+            name = "sin filtro" if r["filter"] == "none" else f"τ={r['tau_ms']:g} ms"
+            ax1.annotate(name, (r["filter_lag"], r["tremor"]), xytext=(4, 6), textcoords="offset points", color=ink2, fontsize=8)
+            ax2.annotate(name, (r["filter_lag"], r["err_follow"]), xytext=(4, -12), textcoords="offset points", color=ink2, fontsize=8)
+    last = rows[-1]
+    ax1.annotate("temblor", (last["filter_lag"], last["tremor"]), xytext=(6, -3), textcoords="offset points", color=ink, fontsize=9)
+    ax1.annotate("jitter", (last["filter_lag"], last["jitter"]), xytext=(6, -3), textcoords="offset points", color=ink, fontsize=9)
+
+    ax1.set_title("Lo que se gana: menos temblor con la mano quieta", loc="left", fontsize=10, color=ink)
+    ax2.set_title("Lo que se paga: el brazo se queda atrás al moverte", loc="left", fontsize=10, color=ink)
+    ax1.set_ylabel("mm (objetivo del brazo)")
+    ax2.set_ylabel("error de seguimiento en el círculo, mm (mediana)")
+    for ax in (ax1, ax2):
+        ax.set_facecolor(surface)
+        ax.set_xlabel("retraso agregado por el filtro (ms)")
+        ax.set_ylim(bottom=0)
+        ax.set_xlim(-10, max(lag) * 1.15)
+        ax.grid(True, color=grid, linewidth=0.6)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+    ax1.legend(frameon=False, loc="lower left", fontsize=8, labelcolor=ink2)
+    fig.suptitle(title, x=0.01, ha="left", fontsize=11, color=ink)
+    fig.tight_layout()
+    fig.savefig(path, facecolor=surface)
+    plt.close(fig)
+    print(f"\nGráfica guardada en {path}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("session", type=Path, help="CSV grabado con tools/record_session.py")
+    parser.add_argument("--filter", choices=filters.FILTERS, default="none")
+    parser.add_argument("--tau", type=float, default=100.0, help="constante de tiempo de la EMA en ms")
+    parser.add_argument("--sweep", action="store_true", help="prueba sin filtro y EMA con varios tau")
+    parser.add_argument("--plot", type=Path, help="con --sweep, guarda la gráfica en este PNG")
     args = parser.parse_args()
 
     session = load_session(args.session)
-    raw = raw_targets(session)
-    print_table(evaluate(session, raw, raw), f"Línea base (sin filtro): {args.session.name}")
+    if args.sweep:
+        rows = run_sweep(session)
+        print_sweep(rows, f"Barrido de filtros: {args.session.name}")
+        if args.plot:
+            plot_sweep(rows, args.plot, f"EMA: temblor contra retraso ({args.session.name}, medias de 3 repeticiones)")
+        return
+
+    mapped = mapped_targets(session)
+    raw = commands_for(session, mapped, filters.NoFilter())
+    params = {"tau_ms": args.tau} if args.filter == "ema" else {}
+    cmd = commands_for(session, mapped, filters.make_filter(args.filter, **params))
+    title = "Línea base (sin filtro)" if args.filter == "none" else f"EMA tau={args.tau:g} ms"
+    print_table(evaluate(session, raw, cmd), f"{title}: {args.session.name}")
 
 
 if __name__ == "__main__":
