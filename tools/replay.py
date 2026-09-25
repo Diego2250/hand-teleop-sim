@@ -6,6 +6,7 @@ Uso:
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter oneeuro --min-cutoff 1 --beta 30
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter kalman --accel 0.01
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --sweep              # barrido de filtros, tabla resumen
+    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --final              # solo las configuraciones finales
 
 Camino: landmarks -> hand_msg (handDetector) -> hand_to_target -> filtro -> clamp_reach -> IK + MuJoCo (armSim).
 Cada mensaje llega al simulador en su tiempo de captura + la latencia de inferencia grabada; entre
@@ -45,6 +46,19 @@ ONEEURO_CUTOFFS = (0.2, 0.3, 0.5, 1, 2, 4, 8)
 ONEEURO_BETAS = (0, 3, 10, 30, 100, 300, 1000)
 KALMAN_ACCELS = (0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2)
 COMPARE_ERR_MM = (3, 5, 10, 20)
+
+# Configuraciones finales, elegidas con la sesión de afinación session_20260924_214146.csv ANTES de grabar la
+# sesión de prueba: dos puntos de operación con error de seguimiento comparable en el círculo (~5 y ~9 mm).
+# fc = 0.5 Hz y no 0.2 Hz: la ganancia en temblor era mínima y 0.2 Hz está en el borde de la cuadrícula probada.
+FINAL_CONFIGS = [
+    ("-", "none", {}),
+    ("rápido", "ema", {"tau_ms": 50}),
+    ("rápido", "oneeuro", {"min_cutoff": 0.5, "beta": 30}),
+    ("rápido", "kalman", {"accel": 0.05}),
+    ("suave", "ema", {"tau_ms": 75}),
+    ("suave", "oneeuro", {"min_cutoff": 0.5, "beta": 10}),
+    ("suave", "kalman", {"accel": 0.02}),
+]
 SWEEP = ([("none", {})]
          + [("ema", {"tau_ms": tau}) for tau in EMA_TAUS]
          + [("oneeuro", {"min_cutoff": fc, "beta": b}) for fc in ONEEURO_CUTOFFS for b in ONEEURO_BETAS]
@@ -253,6 +267,38 @@ def summarize(results):
     }
 
 
+def per_rep(results):
+    """Valores por repetición de las métricas principales, para mostrar cuánto varían."""
+    by = lambda phase, key: [r[key] for r in results if r["phase"] == phase]  # noqa: E731
+    out = {"tremor": [norm3(v) for v in by(1, "tremor")], "jitter": [norm3(v) for v in by(1, "jitter")],
+           "err_follow": by(2, "err_median"), "err_depth": by(3, "err_median")}
+    if any(r["phase"] == 4 for r in results):
+        out |= {"catchup": by(4, "catchup_ms"), "lead": by(4, "lead_mm")}
+    return out
+
+
+def run_final(session, title):
+    mapped = mapped_targets(session)
+    raw = commands_for(session, mapped, filters.NoFilter())
+    cols = [("tremor", "temblor mm", 2), ("jitter", "jitter mm", 2), ("err_follow", "error círculo mm", 1),
+            ("err_depth", "error prof. mm", 1), ("catchup", "alcance ms", 0), ("lead", "se pasa mm", 1)]
+    rows = []
+    for point, name, params in FINAL_CONFIGS:
+        reps = per_rep(evaluate(session, raw, commands_for(session, mapped, filters.make_filter(name, **params))))
+        rows.append((point, label({"filter": name, **params}), reps))
+    base = rows[0][2]  # FINAL_CONFIGS empieza sin filtro
+    for _, _, reps in rows:  # comparación pareada: cada repetición contra sí misma sin filtro
+        reps["tremor_change"] = [100 * (t / b - 1) for t, b in zip(reps["tremor"], base["tremor"])]
+    cols = [c for c in cols if c[0] in base]
+    cols.insert(1, ("tremor_change", "temblor vs sin filtro %", 0))
+    print(f"\n{title}")
+    print("media de las repeticiones (mínimo a máximo); 'temblor vs sin filtro' compara cada repetición consigo misma")
+    print(f"  {'punto':7s} {'filtro':21s} | " + " | ".join(f"{head:>21s}" for _, head, _ in cols))
+    for point, name, reps in rows:
+        cells = [f"{np.mean(reps[k]):.{d}f} ({min(reps[k]):.{d}f} a {max(reps[k]):.{d}f})".rjust(21) for k, _, d in cols]
+        print(f"  {point:7s} {name:21s} | " + " | ".join(cells))
+
+
 def run_sweep(session):
     mapped = mapped_targets(session)
     raw = commands_for(session, mapped, filters.NoFilter())
@@ -402,9 +448,13 @@ def main():
     parser.add_argument("--noise-mm", type=float, default=1.0, help="Kalman: ruido de la medición, mm")
     parser.add_argument("--sweep", action="store_true", help="prueba sin filtro, EMA, One Euro y Kalman con varios parámetros")
     parser.add_argument("--plot", type=Path, help="con --sweep, guarda la gráfica en este PNG")
+    parser.add_argument("--final", action="store_true", help="evalúa solo las configuraciones finales (FINAL_CONFIGS)")
     args = parser.parse_args()
 
     session = load_session(args.session)
+    if args.final:
+        run_final(session, f"Configuraciones finales: {args.session.name}")
+        return
     if args.sweep:
         rows = run_sweep(session)
         print_sweep(rows, f"Barrido de filtros: {args.session.name}")
