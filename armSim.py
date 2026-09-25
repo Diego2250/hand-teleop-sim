@@ -10,6 +10,7 @@ UDP_ADDR = ("127.0.0.1", 5005)
 SHOULDER = np.array([0.0, 0.0, 0.15])
 MAX_REACH = 0.62  # 95% del alcance (0.35 + 0.30 m): evita el brazo totalmente estirado (singular)
 DEPTH_K = 81.2    # distancia mano-cámara en cm ≈ DEPTH_K / d; calibrado con tools/depth_probe.py (cámara 1920x1080)
+HOME_TARGET = np.array([0.3, 0.0, 0.45])  # objetivo antes del primer mensaje
 
 ARM_XML = """
 <mujoco>
@@ -59,14 +60,24 @@ def solve_ik(model, ik_data, site_id, target, q_init, iters=20, damping=1e-2, ma
         ik_data.qpos[:] += dq
     return ik_data.qpos.copy()
 
-def main():
+def make_sim():
     model = mujoco.MjModel.from_xml_string(ARM_XML)
     data = mujoco.MjData(model)
     ik_data = mujoco.MjData(model)
     site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "ee")
+    return model, data, ik_data, site_id
+
+def control_step(model, data, ik_data, site_id, target):
+    """Un paso de simulación persiguiendo target. Lo usan el loop en vivo y tools/replay.py."""
+    data.mocap_pos[0] = target
+    data.ctrl[:] = solve_ik(model, ik_data, site_id, target, data.qpos)
+    mujoco.mj_step(model, data)
+
+def main():
+    model, data, ik_data, site_id = make_sim()
 
     sock = make_receiver()
-    target = np.array([0.3, 0.0, 0.45])
+    target = HOME_TARGET.copy()
     step = 0
     with mujoco.viewer.launch_passive(model, data) as viewer:
         while viewer.is_running():
@@ -74,9 +85,7 @@ def main():
             if msg is not None:
                 target = clamp_reach(hand_to_target(msg))
 
-            data.mocap_pos[0] = target
-            data.ctrl[:] = solve_ik(model, ik_data, site_id, target, data.qpos)
-            mujoco.mj_step(model, data)
+            control_step(model, data, ik_data, site_id, target)
 
             if step % 500 == 0:
                 err = np.linalg.norm(data.site_xpos[site_id] - target) * 1000

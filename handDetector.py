@@ -58,11 +58,13 @@ def palm_scale(landmarks, world, w, h):
         best = max(best, img / real)
     return best / h
 
-def send_hand(landmarks, world, ts, w, h):
+def hand_msg(landmarks, world, ts, w, h):
     palm, wrist = landmarks[9], landmarks[0]
     scale = math.hypot(palm.x - wrist.x, palm.y - wrist.y)
-    msg = {"u": palm.x, "v": palm.y, "s": scale, "d": palm_scale(landmarks, world, w, h), "ts": ts}
-    sock.sendto(json.dumps(msg).encode(), UDP_ADDR)
+    return {"u": palm.x, "v": palm.y, "s": scale, "d": palm_scale(landmarks, world, w, h), "ts": ts}
+
+def send_hand(landmarks, world, ts, w, h):
+    sock.sendto(json.dumps(hand_msg(landmarks, world, ts, w, h)).encode(), UDP_ADDR)
 
 def now_ms():
     return time.monotonic_ns() // 1_000_000
