@@ -4,6 +4,7 @@ Uso:
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv                      # línea base, tabla detallada
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter ema --tau 100
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter oneeuro --min-cutoff 1 --beta 30
+    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter kalman --accel 0.01
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --sweep              # barrido de filtros, tabla resumen
 
 Camino: landmarks -> hand_msg (handDetector) -> hand_to_target -> filtro -> clamp_reach -> IK + MuJoCo (armSim).
@@ -14,7 +15,9 @@ Métricas por repetición:
     temblor (fase quieta): desviación estándar del objetivo enviado al brazo tras quitar la deriva lenta
         (media móvil de DETREND_S), descartando los primeros SETTLE_S de la ventana. También en la punta.
     error de seguimiento (fases seguir y profundidad): distancia punta-objetivo crudo (sin filtro) en cada paso.
-    retraso del filtro: desfase que mejor alinea el objetivo filtrado con el crudo.
+    retraso del filtro: desfase que mejor alinea el objetivo filtrado con el crudo. Solo es un buen resumen
+        para filtros cuya salida es una copia atrasada de la entrada (EMA, One Euro); el Kalman se pasa y
+        deforma, por eso los filtros se comparan contra el error de seguimiento.
     retraso captura->punta: desfase que mejor alinea la punta con el objetivo crudo en tiempo de captura.
 """
 import argparse
@@ -33,12 +36,16 @@ from handDetector import hand_msg  # noqa: E402
 SETTLE_S = 3.0       # se descarta el inicio de la fase quieta: la mano todavía está llegando
 DETREND_S = 1.0      # ventana de la media móvil que separa la deriva lenta del temblor
 MAX_LAG_MS = 800
+MAX_LEAD_MS = 150    # el Kalman puede adelantarse al predecir
 EMA_TAUS = (10, 20, 33, 50, 75, 100, 150, 200, 300)
 ONEEURO_CUTOFFS = (0.2, 0.3, 0.5, 1, 2, 4, 8)
 ONEEURO_BETAS = (0, 3, 10, 30, 100, 300, 1000)
+KALMAN_ACCELS = (0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2)
+COMPARE_ERR_MM = (3, 5, 10, 20)
 SWEEP = ([("none", {})]
          + [("ema", {"tau_ms": tau}) for tau in EMA_TAUS]
-         + [("oneeuro", {"min_cutoff": fc, "beta": b}) for fc in ONEEURO_CUTOFFS for b in ONEEURO_BETAS])
+         + [("oneeuro", {"min_cutoff": fc, "beta": b}) for fc in ONEEURO_CUTOFFS for b in ONEEURO_BETAS]
+         + [("kalman", {"accel": a}) for a in KALMAN_ACCELS])
 PHASE_NAMES = {1: "quieta", 2: "seguir", 3: "profundidad"}
 AXES = ("prof", "lat", "vert")  # x, y, z del brazo
 
@@ -109,16 +116,17 @@ def estimate_lag(ref, sig, k0, k1, dt, max_lag_ms=MAX_LAG_MS):
     return int(np.argmin(mse)) * dt
 
 
-def estimate_filter_lag(t, raw, cmd, mask, max_lag_ms=MAX_LAG_MS):
-    """Retraso (ms, resolución 1 ms) del objetivo filtrado contra el crudo, en los mensajes de mask.
+def estimate_filter_lag(t, raw, cmd, mask, max_lag_ms=MAX_LAG_MS, max_lead_ms=MAX_LEAD_MS):
+    """Retraso (ms, resolución 1 ms; negativo = adelanto) del objetivo filtrado contra el crudo, en los mensajes de mask.
 
     Compara cmd(t_i) contra raw(t_i - lag) interpolando raw linealmente entre frames: comparar las dos
     señales en escalera redondea el retraso a múltiplos de un frame (33 ms).
     """
     ti, ci = t[mask], cmd[mask]
+    shifts = range(-max_lead_ms, max_lag_ms + 1)
     mse = [np.mean(np.sum((ci - np.column_stack([np.interp(ti - s, t, raw[:, a]) for a in range(3)])) ** 2, axis=1))
-           for s in range(max_lag_ms + 1)]
-    return int(np.argmin(mse))
+           for s in shifts]
+    return shifts[int(np.argmin(mse))]
 
 
 def norm3(stds):
@@ -216,13 +224,18 @@ def label(row):
         return f"EMA tau={row['tau_ms']:g} ms"
     if row["filter"] == "oneeuro":
         return f"1€ fc={row['min_cutoff']:g} Hz β={row['beta']:g}"
+    if row["filter"] == "kalman":
+        return f"Kalman a={row['accel']:g} m/s²"
     return "sin filtro"
 
 
-def frontier(rows):
-    """Configuraciones que nadie supera: para su retraso, ninguna otra deja menos temblor."""
+FILTER_NAMES = {"ema": "EMA", "kalman": "Kalman", "oneeuro": "One Euro"}
+
+
+def frontier(rows, cost="err_follow"):
+    """Configuraciones que nadie supera: para su costo (error de seguimiento o retraso), ninguna otra deja menos temblor."""
     best, out = float("inf"), []
-    for r in sorted(rows, key=lambda r: (r["filter_lag"], r["tremor"])):
+    for r in sorted(rows, key=lambda r: (r[cost], r["tremor"])):
         if r["tremor"] < best:
             best = r["tremor"]
             out.append(r)
@@ -239,28 +252,32 @@ def print_rows(rows):
 
 def print_sweep(rows, title):
     base = [r for r in rows if r["filter"] == "none"]
-    ema = base + [r for r in rows if r["filter"] == "ema"]
-    euro = [r for r in rows if r["filter"] == "oneeuro"]
+    groups = {name: [r for r in rows if r["filter"] == name] for name in FILTER_NAMES}
     print(f"\n{title}  (medias de las 3 repeticiones)")
     print("\nEMA")
-    print_rows(ema)
-    if not euro:
-        return
-    print(f"\nOne Euro: frontera de {len(euro)} combinaciones (fc en {ONEEURO_CUTOFFS} Hz, β en {ONEEURO_BETAS})")
-    front = frontier(base + euro)
-    print_rows(front)
+    print_rows(base + groups["ema"])
+    if groups["kalman"]:
+        print("\nKalman, velocidad constante (ruido de medición 1 mm; su retraso no es un atraso puro, ver el error)")
+        print_rows(base + groups["kalman"])
+    if groups["oneeuro"]:
+        print(f"\nOne Euro: frontera de {len(groups['oneeuro'])} combinaciones (fc en {ONEEURO_CUTOFFS} Hz, β en {ONEEURO_BETAS})")
+        print_rows(frontier(base + groups["oneeuro"]))
 
-    ema_sorted = sorted(ema, key=lambda r: r["filter_lag"])
-    lags = [r["filter_lag"] for r in ema_sorted]
-    at = lambda key, lag: float(np.interp(lag, lags, [r[key] for r in ema_sorted]))  # noqa: E731
-    print("\nCon el mismo retraso del filtro, temblor que deja cada uno (EMA interpolada)")
-    print(f"  {'retraso':>7s} | {'EMA':>7s} | {'One Euro':>8s} | cambio | jitter EMA -> One Euro")
-    for r in front:
-        if r["filter"] != "oneeuro" or r["filter_lag"] > lags[-1]:
-            continue
-        e = at("tremor", r["filter_lag"])
-        print(f"  {r['filter_lag']:4.0f} ms | {e:4.2f} mm | {r['tremor']:5.2f} mm | {100 * (r['tremor'] - e) / e:+5.0f}% |"
-              f" {at('jitter', r['filter_lag']):.2f} -> {r['jitter']:.2f} mm   ({label(r)})")
+    names = [n for n in FILTER_NAMES if groups[n]]
+    curves = {n: frontier(base + groups[n]) for n in names}
+    print("\nCon el mismo error de seguimiento en el círculo: temblor / jitter que deja cada filtro")
+    print("(interpolado sobre la frontera de cada uno; '-' = fuera del rango probado)")
+    print(f"  {'error':>7s} | " + " | ".join(f"{FILTER_NAMES[n]:>16s}" for n in names))
+    for err in COMPARE_ERR_MM:
+        cells = []
+        for n in names:
+            x = [r["err_follow"] for r in curves[n]]
+            if not x[0] <= err <= x[-1]:
+                cells.append(f"{'-':>16s}")
+                continue
+            at = lambda key: float(np.interp(err, x, [r[key] for r in curves[n]]))  # noqa: E731
+            cells.append(f"{at('tremor'):.2f} / {at('jitter'):.2f} mm".rjust(16))
+        print(f"  {err:4g} mm | " + " | ".join(cells))
 
 
 PLOT_MAX_LAG_MS = 320
@@ -282,7 +299,7 @@ def plot_sweep(rows, path, title):
     base = [r for r in rows if r["filter"] == "none"]
     euro = [r for r in rows if r["filter"] == "oneeuro"]
     ema = visible(sorted(base + [r for r in rows if r["filter"] == "ema"], key=lambda r: r["filter_lag"]))
-    front = visible(frontier(base + euro))
+    front = visible(frontier(base + euro, cost="filter_lag"))
     ms_per_mm = np.polyfit([r["filter_lag"] for r in ema], [r["err_follow"] for r in ema], 1)[0] * 10
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), dpi=150, facecolor=surface)
@@ -331,7 +348,9 @@ def main():
     parser.add_argument("--tau", type=float, default=100.0, help="EMA: constante de tiempo en ms")
     parser.add_argument("--min-cutoff", type=float, default=1.0, help="One Euro: corte con la mano quieta, Hz")
     parser.add_argument("--beta", type=float, default=30.0, help="One Euro: aumento del corte por m/s, Hz")
-    parser.add_argument("--sweep", action="store_true", help="prueba sin filtro, EMA y One Euro con varios parámetros")
+    parser.add_argument("--accel", type=float, default=0.01, help="Kalman: aceleración aleatoria de la mano, m/s²")
+    parser.add_argument("--noise-mm", type=float, default=1.0, help="Kalman: ruido de la medición, mm")
+    parser.add_argument("--sweep", action="store_true", help="prueba sin filtro, EMA, One Euro y Kalman con varios parámetros")
     parser.add_argument("--plot", type=Path, help="con --sweep, guarda la gráfica en este PNG")
     args = parser.parse_args()
 
@@ -346,7 +365,8 @@ def main():
     mapped = mapped_targets(session)
     raw = commands_for(session, mapped, filters.NoFilter())
     params = {"none": {}, "ema": {"tau_ms": args.tau},
-              "oneeuro": {"min_cutoff": args.min_cutoff, "beta": args.beta}}[args.filter]
+              "oneeuro": {"min_cutoff": args.min_cutoff, "beta": args.beta},
+              "kalman": {"accel": args.accel, "noise_mm": args.noise_mm}}[args.filter]
     cmd = commands_for(session, mapped, filters.make_filter(args.filter, **params))
     title = "Línea base (sin filtro)" if args.filter == "none" else label({"filter": args.filter, **params})
     print_table(evaluate(session, raw, cmd), f"{title}: {args.session.name}")
