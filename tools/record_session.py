@@ -4,12 +4,13 @@ Uso (desde PyCharm, por el permiso de cámara):
     python tools/record_session.py
 
 No usa teclas: arranca solo cuando ve tu mano 2 s seguidos y va mostrando cada fase.
-Por repetición (3 en total, unos 2 minutos):
+Por repetición (3 en total, unos 3 minutos):
     1. quieta:      palma quieta en el punto blanco, a ~45 cm (temblor)
     2. seguir:      sigue con la palma el punto que da vueltas (retraso y error de seguimiento)
     3. profundidad: acerca y aleja la mano hasta que tu anillo verde iguale al blanco
-Cada fase tiene 3 s de preparación (se graban con rec=0: sirven para que los filtros arranquen)
-y 10 s de grabación (rec=1). q aborta y guarda lo grabado.
+    4. saltos:      el punto salta cada 2.5 s; lleva la palma y quédate quieto (asentamiento y sobrepaso)
+Cada fase tiene una preparación (5 s la quieta, 3 s las demás; se graba con rec=0 y sirve para que la
+mano llegue y los filtros arranquen) y 10 s de grabación (rec=1). q aborta y guarda lo grabado.
 """
 import csv
 import math
@@ -30,17 +31,21 @@ MODEL_PATH = ROOT / "hand_landmarker.task"
 DATA_DIR = ROOT / "data"
 
 REPS = 3
-PREP_MS, REC_MS = 3000, 10000
+PREP_MS = {1: 5000, 2: 3000, 3: 3000, 4: 3000}  # la quieta necesita más: la mano llega desde la fase anterior
+REC_MS = 10000
 HAND_WAIT_MS = 2000
 PERIOD_S = 5.0             # una vuelta del círculo o un ciclo de profundidad
 CIRCLE_R = 0.2             # radio del círculo guía, en unidades de alto del frame
 Z_MID, Z_AMP = 45.0, 15.0  # cm: la fase de profundidad va de 30 a 60 cm
 RING_AT_MID = 0.12         # radio del anillo a 45 cm, en unidades de alto del frame
+JUMP_S = 2.5               # cada cuánto salta el punto en la fase de saltos
+JUMPS = ((-0.2, 0.0), (0.2, 0.0), (0.0, -0.2), (0.0, 0.2))  # posiciones del punto, en unidades de alto del frame
 DISPLAY_W = 1280
 PHASES = {
     1: ("quieta", "Manten la palma quieta en el punto, a ~45 cm"),
     2: ("seguir", "Sigue el punto con el centro de la palma"),
     3: ("profundidad", "Acerca y aleja la mano: iguala tu anillo verde al blanco"),
+    4: ("saltos", "Lleva la palma al punto y quedate quieto hasta que salte"),
 }
 WHITE, GREEN, YELLOW, RED = (255, 255, 255), (0, 255, 0), (0, 255, 255), (0, 0, 255)
 
@@ -66,6 +71,9 @@ def guide(phase, t, w, h):
         return 0.5 + CIRCLE_R * h / w * math.cos(a), 0.5 + CIRCLE_R * math.sin(a), Z_MID
     if phase == 3:
         return 0.5, 0.5, Z_MID + Z_AMP * math.sin(a)
+    if phase == 4:
+        dx, dy = JUMPS[min(int(t / JUMP_S), len(JUMPS) - 1)]
+        return 0.5 + dx * h / w, 0.5 + dy, Z_MID
     return 0.5, 0.5, Z_MID
 
 
@@ -74,8 +82,8 @@ def build_schedule(t0):
     blocks, t = [], t0
     for rep in range(1, REPS + 1):
         for phase in PHASES:
-            blocks.append((t, t + PREP_MS + REC_MS, rep, phase, t + PREP_MS))
-            t += PREP_MS + REC_MS
+            blocks.append((t, t + PREP_MS[phase] + REC_MS, rep, phase, t + PREP_MS[phase]))
+            t += PREP_MS[phase] + REC_MS
     return blocks
 
 
@@ -140,7 +148,7 @@ def draw_ui(img, t, schedule, hand, hand_since):
     else:
         _, end, rep, phase, rec_start = block
         draw_target(img, *guide(phase, max(0, t - rec_start) / 1000, w, h), WHITE)
-        put(img, f"Repeticion {rep}/{REPS} | Fase {phase}/3: {PHASES[phase][0]}", 0)
+        put(img, f"Repeticion {rep}/{REPS} | Fase {phase}/{len(PHASES)}: {PHASES[phase][0]}", 0)
         put(img, PHASES[phase][1], 1)
         if t < rec_start:
             put(img, f"Preparate: {(rec_start - t) / 1000:.1f}", 2, YELLOW, 1.2)
