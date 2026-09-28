@@ -18,9 +18,10 @@ MediaPipe hand landmarks jitter, and a robot arm driven by them inherits that ji
 signal removes tremor but makes the arm lag behind the hand. **Which filter gives the best balance
 between a steady arm when the hand is still and accurate tracking when the hand moves?**
 
-Compared: no filter, an exponential moving average (EMA), the
-[One Euro filter](https://gery.casiez.net/1euro/) (Casiez, Roussel and Vogel, CHI 2012) and a
-constant-velocity Kalman filter.
+Compared: no filter, an
+[exponential moving average](https://www.itl.nist.gov/div898/handbook/pmc/section4/pmc431.htm)
+(EMA), the [One Euro filter](https://gery.casiez.net/1euro/) (Casiez, Roussel and Vogel, CHI 2012)
+and a constant-velocity [Kalman filter](https://doi.org/10.1115/1.3662552) (Kalman, 1960).
 
 ## Short answer
 
@@ -245,14 +246,21 @@ models/                 unmodified MuJoCo Menagerie models (Apache 2.0), see mod
 
 Developed with an AI coding assistant (Claude Code), which wrote most of the code and proposed parts
 of the method, such as the record-and-replay evaluation and comparing filters at equal tracking
-error. The research question, the choice between the options at each step and all the recordings
+error. The research question, the main research, the choice between the options at each step and all the recordings
 are my own.
 
 ## Credits
 
-Robot models from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (Google
-DeepMind, Franka Emika and Shadow Robot Company, Apache 2.0). Hand tracking by
-[MediaPipe](https://ai.google.dev/edge/mediapipe). Simulation with [MuJoCo](https://mujoco.org).
-One Euro filter: G. Casiez, N. Roussel and D. Vogel,
-["1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in Interactive Systems"](https://dl.acm.org/doi/10.1145/2207676.2208639),
-CHI 2012 ([official page](https://gery.casiez.net/1euro/)).
+- Robot models: [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (Google
+  DeepMind, Franka Emika and Shadow Robot Company, Apache 2.0).
+- Hand tracking: [MediaPipe](https://ai.google.dev/edge/mediapipe). Simulation:
+  [MuJoCo](https://mujoco.org).
+- Exponential moving average: single exponential smoothing as described in the
+  [NIST/SEMATECH e-Handbook of Statistical Methods](https://www.itl.nist.gov/div898/handbook/pmc/section4/pmc431.htm);
+  `filters.py` uses its time-constant form so the smoothing does not depend on the frame rate.
+- Kalman filter: R. E. Kalman,
+  ["A New Approach to Linear Filtering and Prediction Problems"](https://doi.org/10.1115/1.3662552),
+  Journal of Basic Engineering, 1960.
+- One Euro filter: G. Casiez, N. Roussel and D. Vogel,
+  ["1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in Interactive Systems"](https://dl.acm.org/doi/10.1145/2207676.2208639),
+  CHI 2012 ([official page](https://gery.casiez.net/1euro/)).
