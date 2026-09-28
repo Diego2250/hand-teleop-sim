@@ -154,6 +154,42 @@ Full tables: `results/final_test_session.txt`, `results/final_tuning_session.txt
   open-hand offsets come from the author's recordings. The demo disables contacts, so it does not
   grasp objects.
 
+## Possible applications
+
+The same chain from camera to robot applies wherever a person has to guide a machine without
+touching it.
+
+- **Industrial teleoperation of heavy or hot loads.** An operator away from a furnace or a heavy part
+  moves a hand in front of a camera and an industrial arm repeats the motion. Beyond this project it
+  would need emergency stops and forbidden zones, end-to-end latency measured on real hardware,
+  motion scaling and force feedback.
+- **Prosthetics.** A prosthesis cannot read the missing hand; its control usually comes from muscle
+  signals. Vision can still help, by recognizing the object to pre-shape the grasp or by letting the
+  healthy hand demonstrate a gesture that the prosthesis mirrors. The joint-to-joint finger mapping
+  and the simulated dexterous hand here are a starting point for that kind of prototyping.
+- **Therapy games.** A patient with limited hand mobility completes goals such as grasping a cube,
+  drawing circles or closing one finger, and the game tracks progress between sessions. The guided
+  protocol, the per-finger angles and the tremor, accuracy and catch-up metrics already exist here,
+  and only landmarks are stored, not video. It would need to be designed with therapists, calibrated
+  to each patient's range of motion and clinically validated.
+- **Others:** collecting demonstrations to teach robots by imitation, working in hazardous or remote
+  places, and teaching teleoperation without buying hardware.
+
+## Related work
+
+These ideas already have serious precedents. This project is a minimal version of the field: an
+ordinary webcam instead of gloves or suits, and an explicit measurement of the trade-off between
+tremor and lag.
+
+| System | What it does | Relation to this project |
+|---|---|---|
+| [DexPilot](https://arxiv.org/abs/1910.03135) (NVIDIA, 2019) | Controls a 23-actuator robot arm and hand with cameras by observing the operator's bare hand | Same idea, on a real robot and fine manipulation tasks |
+| [AnyTeleop](https://arxiv.org/abs/2307.04577) (UC San Diego and NVIDIA, RSS 2023) | Vision-based teleoperation for many arms, dexterous hands, cameras and simulators, used to collect data for imitation learning | The closest: cameras, dexterous hands and simulation, built to generalize across robots |
+| [Shadow Teleoperation System](https://shadowrobot.com/teleoperation/) (Shadow Robot) | A glove drives the Shadow Dexterous Hand; with the HaptX glove the operator feels pressure, temperature and vibration. For nuclear, pharmaceutical and maintenance work | The same hand as the demo, driven by sensor gloves with touch feedback instead of a camera |
+| [Sarcos Guardian XT](https://www.robotics247.com/article/sarcos_robotics_successfully_implements_teleoperation_capabilities_of_guardian_xt_robotic_system) (announced 2021) | Teleoperated robot that lifts up to 90 kg; the operator wears a motion-capture suit, a VR headset and force feedback | The industrial use case, with a suit and force feedback instead of a camera |
+| [A hand that sees](https://www.ncl.ac.uk/press/articles/archive/2017/05/handthatsees/) (Newcastle University, 2017) | Prosthetic hand with a camera that recognizes an object's shape and picks one of four grasps | The prosthetic use case: vision chooses the grasp, but the camera looks at the object, not the user's hand |
+| [Leap Motion for rehabilitation](https://pmc.ncbi.nlm.nih.gov/articles/PMC12103098/) (IEEE TNSRE, 2024) | Measured camera-based hand-tracking accuracy with 10 people with upper-body disabilities and 7 without; accuracy did not differ between groups | The therapy use case, with a specialized infrared camera and assessment rather than a game |
+
 ## Reproduce
 
 Tested with Python 3.12 on macOS (Apple Silicon).
