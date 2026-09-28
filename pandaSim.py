@@ -129,7 +129,8 @@ class PandaDemo:
         target = self.filt.update(raw, msg["ts"] / 1000)
         self.q_des = self.ik.solve(target, self.q_des)
         self.d.ctrl[:7] = self.q_des
-        self.d.ctrl[7] = self.gripper.update(msg["p"])
+        if "p" in msg:  # un detector anterior no manda el pellizco: la pinza se queda como está
+            self.d.ctrl[7] = self.gripper.update(msg["p"])
         self.d.mocap_pos[self.target_id] = target
         self.d.mocap_pos[self.raw_id] = raw
         return target
