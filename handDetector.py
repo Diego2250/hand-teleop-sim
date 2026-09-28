@@ -63,10 +63,33 @@ def pinch(world):
     thumb, index = world[4], world[8]
     return math.dist((thumb.x, thumb.y, thumb.z), (index.x, index.y, index.z))
 
+FINGER_CHAINS = ((5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16), (17, 18, 19, 20), (1, 2, 3, 4))  # índice ... pulgar
+
+def _angle(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    return math.acos(max(-1.0, min(1.0, dot / (math.hypot(*a) * math.hypot(*b)))))
+
+def finger_flexion(world):
+    """Doblez (rad) de cada articulación, desde los world landmarks: 0 = recto, crece al doblar.
+
+    Orden: índice, medio, anular, meñique y pulgar; por dedo, sus tres articulaciones desde la palma
+    (MCP, PIP, DIP; en el pulgar CMC, MCP, IP). Cada ángulo es el que forman dos segmentos seguidos.
+    """
+    p = [(q.x, q.y, q.z) for q in world]
+    seg = lambda a, b: tuple(pb - pa for pa, pb in zip(p[a], p[b]))  # noqa: E731
+    out = []
+    for a, b, c, tip in FINGER_CHAINS:
+        v0, v1, v2, v3 = seg(0, a), seg(a, b), seg(b, c), seg(c, tip)
+        out += [_angle(v0, v1), _angle(v1, v2), _angle(v2, v3)]
+    return out
+
 def hand_msg(landmarks, world, ts, w, h):
     palm, wrist = landmarks[9], landmarks[0]
     scale = math.hypot(palm.x - wrist.x, palm.y - wrist.y)
-    return {"u": palm.x, "v": palm.y, "s": scale, "d": palm_scale(landmarks, world, w, h), "p": pinch(world), "ts": ts}
+    thumb, knuckle = world[4], world[5]
+    return {"u": palm.x, "v": palm.y, "s": scale, "d": palm_scale(landmarks, world, w, h), "p": pinch(world),
+            "f": [round(a, 3) for a in finger_flexion(world)],
+            "th": math.dist((thumb.x, thumb.y, thumb.z), (knuckle.x, knuckle.y, knuckle.z)), "ts": ts}
 
 def send_hand(landmarks, world, ts, w, h):
     sock.sendto(json.dumps(hand_msg(landmarks, world, ts, w, h)).encode(), UDP_ADDR)
