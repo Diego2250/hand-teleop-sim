@@ -1,10 +1,12 @@
-import math
+import argparse
 import time
 import numpy as np
 import mujoco
 import mujoco.viewer
 import json
 import socket
+
+import filters
 
 UDP_ADDR = ("127.0.0.1", 5005)
 SHOULDER = np.array([0.0, 0.0, 0.15])
@@ -34,6 +36,9 @@ ARM_XML = """
     </body>
     <body name="target" mocap="true" pos="0.3 0 0.45">
       <geom type="sphere" size="0.03" rgba="1 0 0 0.6" contype="0" conaffinity="0"/>
+    </body>
+    <body name="raw" mocap="true" pos="0.3 0 0.45">
+      <geom type="sphere" size="0.018" rgba="0.5 0.5 0.5 0.5" contype="0" conaffinity="0"/>
     </body>
   </worldbody>
   <actuator>
@@ -73,7 +78,16 @@ def control_step(model, data, ik_data, site_id, target):
     data.ctrl[:] = solve_ik(model, ik_data, site_id, target, data.qpos)
     mujoco.mj_step(model, data)
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Brazo simulado controlado por la mano. Correr con mjpython.")
+    filters.add_arguments(parser)
+    return parser.parse_args()
+
 def main():
+    args = parse_args()
+    params = filters.params_from_arguments(args)
+    filt = filters.make_filter(args.filter, **params)
+    print(f"Filtro: {args.filter} {params}")
     model, data, ik_data, site_id = make_sim()
 
     sock = make_receiver()
@@ -83,7 +97,9 @@ def main():
         while viewer.is_running():
             msg = read_latest(sock)
             if msg is not None:
-                target = clamp_reach(hand_to_target(msg))
+                raw = hand_to_target(msg)
+                target = clamp_reach(filt.update(raw, msg["ts"] / 1000))  # mismo orden que tools/replay.py
+                data.mocap_pos[1] = clamp_reach(raw)  # esfera gris: la mano sin filtrar
 
             control_step(model, data, ik_data, site_id, target)
 
