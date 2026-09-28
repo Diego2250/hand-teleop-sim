@@ -166,10 +166,19 @@ pip install -r requirements.txt
 MuJoCo viewer requires `mjpython`, and the scripts that use the camera need camera permission for the
 app that runs them.
 
+The recordings behind every number are in `recordings/` (landmarks only, no video; see
+`recordings/README.md`). To reproduce the results tables and the sweep chart:
+
 ```bash
-python tools/record_session.py                                  # guided recording, ~3 min, saved to data/
-python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --final   # fixed configurations, results table
-python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --sweep --plot sweep.png
+python tools/replay.py recordings/session_20260927_190639.csv --final   # test session table
+python tools/replay.py recordings/session_20260924_214146.csv --final   # tuning session table
+python tools/replay.py recordings/session_20260927_190639.csv --sweep --plot sweep.png
+```
+
+To record a new session (guided, about 3 minutes, saved to `data/`):
+
+```bash
+python tools/record_session.py
 ```
 
 Live, start the simulator first and then the detector:
@@ -191,8 +200,16 @@ tools/record_session.py guided recording protocol
 tools/replay.py         offline replay, metrics, sweeps, plots and the fixed final configurations
 tools/depth_probe.py    depth-proxy comparison recorder
 results/                tables, figures and the demo video cited above
+recordings/             raw landmark recordings behind every result
 models/                 unmodified MuJoCo Menagerie models (Apache 2.0), see models/README.md
 ```
+
+## How this was built
+
+Developed with an AI coding assistant (Claude Code), which wrote most of the code and proposed parts
+of the method, such as the record-and-replay evaluation and comparing filters at equal tracking
+error. The research question, the choice between the options at each step and all the recordings
+are my own.
 
 ## Credits
 
