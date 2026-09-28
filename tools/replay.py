@@ -4,7 +4,7 @@ Uso:
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv                      # línea base, tabla detallada
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter ema --tau 100
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter oneeuro --min-cutoff 1 --beta 30
-    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter kalman --accel 0.01
+    python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --filter kalman --accel 0.05
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --sweep              # barrido de filtros, tabla resumen
     python tools/replay.py data/session_XXXXXXXX_XXXXXX.csv --final              # solo las configuraciones finales
 
@@ -440,12 +440,7 @@ def plot_sweep(rows, path, title):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("session", type=Path, help="CSV grabado con tools/record_session.py")
-    parser.add_argument("--filter", choices=filters.FILTERS, default="none")
-    parser.add_argument("--tau", type=float, default=100.0, help="EMA: constante de tiempo en ms")
-    parser.add_argument("--min-cutoff", type=float, default=1.0, help="One Euro: corte con la mano quieta, Hz")
-    parser.add_argument("--beta", type=float, default=30.0, help="One Euro: aumento del corte por m/s, Hz")
-    parser.add_argument("--accel", type=float, default=0.01, help="Kalman: aceleración aleatoria de la mano, m/s²")
-    parser.add_argument("--noise-mm", type=float, default=1.0, help="Kalman: ruido de la medición, mm")
+    filters.add_arguments(parser)
     parser.add_argument("--sweep", action="store_true", help="prueba sin filtro, EMA, One Euro y Kalman con varios parámetros")
     parser.add_argument("--plot", type=Path, help="con --sweep, guarda la gráfica en este PNG")
     parser.add_argument("--final", action="store_true", help="evalúa solo las configuraciones finales (FINAL_CONFIGS)")
@@ -464,9 +459,7 @@ def main():
 
     mapped = mapped_targets(session)
     raw = commands_for(session, mapped, filters.NoFilter())
-    params = {"none": {}, "ema": {"tau_ms": args.tau},
-              "oneeuro": {"min_cutoff": args.min_cutoff, "beta": args.beta},
-              "kalman": {"accel": args.accel, "noise_mm": args.noise_mm}}[args.filter]
+    params = filters.params_from_arguments(args)
     cmd = commands_for(session, mapped, filters.make_filter(args.filter, **params))
     title = "Línea base (sin filtro)" if args.filter == "none" else label({"filter": args.filter, **params})
     print_table(evaluate(session, raw, cmd), f"{title}: {args.session.name}")

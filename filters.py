@@ -114,3 +114,20 @@ FILTERS = {"none": NoFilter, "ema": EMA, "oneeuro": OneEuro, "kalman": Kalman}
 
 def make_filter(name, **params):
     return FILTERS[name](**params)
+
+
+def add_arguments(parser):
+    """Argumentos de línea de comandos para elegir filtro; por defecto, el punto "rápido" de FINAL_CONFIGS."""
+    parser.add_argument("--filter", choices=FILTERS, default="none")
+    parser.add_argument("--tau", type=float, default=50.0, help="EMA: constante de tiempo en ms")
+    parser.add_argument("--min-cutoff", type=float, default=0.5, help="One Euro: corte con la mano quieta, Hz")
+    parser.add_argument("--beta", type=float, default=30.0, help="One Euro: aumento del corte por m/s, Hz")
+    parser.add_argument("--accel", type=float, default=0.05, help="Kalman: aceleración aleatoria de la mano, m/s²")
+    parser.add_argument("--noise-mm", type=float, default=1.0, help="Kalman: ruido de la medición, mm")
+
+
+def params_from_arguments(args):
+    """Parámetros del filtro elegido con add_arguments."""
+    return {"none": {}, "ema": {"tau_ms": args.tau},
+            "oneeuro": {"min_cutoff": args.min_cutoff, "beta": args.beta},
+            "kalman": {"accel": args.accel, "noise_mm": args.noise_mm}}[args.filter]
