@@ -3,7 +3,10 @@
 Teleoperating simulated robot arms in MuJoCo with a webcam hand tracker, and a small controlled
 experiment on which smoothing filter gives the best trade-off between tremor and responsiveness.
 
-![Franka Panda with a Shadow Hand following the operator's hand](results/shadow_demo.png)
+[![Demo video: the simulated Franka Panda and Shadow Hand copying the operator's hand and fingers](results/demo_thumbnail.jpg)](results/demo.mp4)
+
+*Demo, 18 s (click to open the video): the webcam with the MediaPipe landmarks on top, and the simulated
+Franka Panda with a Shadow Hand below, following the hand and copying open hand, fist, pinch and pointing.*
 
 This is an applied project, not published research: one operator, one camera, two recorded sessions
 of three repetitions each. The numbers below describe this setup and are not tested for statistical
@@ -187,7 +190,7 @@ filters.py              NoFilter, EMA, One Euro, Kalman with a common update(z, 
 tools/record_session.py guided recording protocol
 tools/replay.py         offline replay, metrics, sweeps, plots and the fixed final configurations
 tools/depth_probe.py    depth-proxy comparison recorder
-results/                tables and figures cited above
+results/                tables, figures and the demo video cited above
 models/                 unmodified MuJoCo Menagerie models (Apache 2.0), see models/README.md
 ```
 
