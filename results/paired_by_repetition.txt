@@ -1,0 +1,23 @@
+Paired tremor change of each repetition against itself without a filter (%).
+Configurations fixed in commit 8528057 before the test session was recorded.
+
+Tuning session (session_20260924_214146.csv)
+  rápido  ema      rep1  -16  rep2  -14  rep3  -10
+  rápido  oneeuro  rep1  -47  rep2  -36  rep3  -25
+  rápido  kalman   rep1   -5  rep2   -3  rep3   +0
+  suave   ema      rep1  -23  rep2  -21  rep3  -17
+  suave   oneeuro  rep1  -56  rep2  -48  rep3  -39
+  suave   kalman   rep1  -23  rep2  -21  rep3  -14
+  rápido: One Euro leaves less tremor than EMA in 3 of 3 repetitions
+  suave: One Euro leaves less tremor than EMA in 3 of 3 repetitions
+
+Test session (session_20260927_190639.csv)
+  rápido  ema      rep1  -11  rep2   -7  rep3  -13
+  rápido  oneeuro  rep1  -27  rep2   -2  rep3  -41
+  rápido  kalman   rep1   +1  rep2   +7  rep3   -3
+  suave   ema      rep1  -16  rep2  -11  rep3  -20
+  suave   oneeuro  rep1  -36  rep2   -6  rep3  -51
+  suave   kalman   rep1   -9  rep2   -3  rep3  -19
+  rápido: One Euro leaves less tremor than EMA in 2 of 3 repetitions
+  suave: One Euro leaves less tremor than EMA in 2 of 3 repetitions
+

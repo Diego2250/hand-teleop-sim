@@ -1,0 +1,11 @@
+
+Configuraciones finales: session_20260927_190639.csv
+media de las repeticiones (mínimo a máximo); 'temblor vs sin filtro' compara cada repetición consigo misma
+  punto   filtro                |            temblor mm | temblor vs sin filtro % |             jitter mm |      error círculo mm |        error prof. mm |            alcance ms |            se pasa mm
+  -       sin filtro            |    2.98 (0.72 a 7.22) |             0 (0 a 0) |    0.87 (0.31 a 1.86) |       2.2 (2.2 a 2.3) |       1.2 (1.1 a 1.4) |    1200 (1003 a 1540) |       4.0 (2.4 a 5.4)
+  rápido  EMA tau=50 ms         |    2.75 (0.63 a 6.74) |        -10 (-13 a -7) |    0.60 (0.18 a 1.38) |       6.7 (6.4 a 6.8) |       3.6 (3.0 a 4.2) |     1160 (935 a 1456) |       2.6 (2.4 a 2.8)
+  rápido  1€ fc=0.5 Hz β=30     |    2.74 (0.42 a 7.08) |        -23 (-41 a -2) |    0.58 (0.09 a 1.49) |       5.6 (5.5 a 5.7) |       3.7 (3.4 a 4.0) |    1566 (1488 a 1610) |       4.3 (3.3 a 5.1)
+  rápido  Kalman a=0.05 m/s²    |    3.15 (0.70 a 7.76) |            2 (-3 a 7) |    0.60 (0.15 a 1.44) |       5.2 (5.0 a 5.7) |       3.2 (2.9 a 3.5) |    1389 (1279 a 1478) |    24.9 (22.6 a 27.5)
+  suave   EMA tau=75 ms         |    2.61 (0.58 a 6.42) |       -16 (-20 a -11) |    0.53 (0.15 a 1.24) |     10.2 (9.8 a 10.4) |       5.6 (4.7 a 6.5) |     1193 (982 a 1476) |       3.1 (2.6 a 3.7)
+  suave   1€ fc=0.5 Hz β=10     |    2.58 (0.35 a 6.77) |        -31 (-51 a -6) |    0.52 (0.08 a 1.34) |       9.2 (8.9 a 9.4) |       6.0 (5.5 a 6.5) |    1621 (1550 a 1686) |       4.7 (3.3 a 6.0)
+  suave   Kalman a=0.02 m/s²    |    2.84 (0.58 a 7.03) |        -10 (-19 a -3) |    0.53 (0.12 a 1.28) |     10.4 (9.9 a 11.1) |       6.4 (6.0 a 7.0) |    1729 (1700 a 1774) |    28.4 (25.0 a 31.2)
