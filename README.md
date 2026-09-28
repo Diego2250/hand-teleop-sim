@@ -18,8 +18,9 @@ MediaPipe hand landmarks jitter, and a robot arm driven by them inherits that ji
 signal removes tremor but makes the arm lag behind the hand. **Which filter gives the best balance
 between a steady arm when the hand is still and accurate tracking when the hand moves?**
 
-Compared: no filter, an exponential moving average (EMA), the One Euro filter
-(Casiez, Roussel and Vogel, CHI 2012) and a constant-velocity Kalman filter.
+Compared: no filter, an exponential moving average (EMA), the
+[One Euro filter](https://gery.casiez.net/1euro/) (Casiez, Roussel and Vogel, CHI 2012) and a
+constant-velocity Kalman filter.
 
 ## Short answer
 
@@ -252,5 +253,6 @@ are my own.
 Robot models from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) (Google
 DeepMind, Franka Emika and Shadow Robot Company, Apache 2.0). Hand tracking by
 [MediaPipe](https://ai.google.dev/edge/mediapipe). Simulation with [MuJoCo](https://mujoco.org).
-One Euro filter: G. Casiez, N. Roussel and D. Vogel, "1€ Filter: A Simple Speed-based Low-pass
-Filter for Noisy Input in Interactive Systems", CHI 2012.
+One Euro filter: G. Casiez, N. Roussel and D. Vogel,
+["1€ Filter: A Simple Speed-based Low-pass Filter for Noisy Input in Interactive Systems"](https://dl.acm.org/doi/10.1145/2207676.2208639),
+CHI 2012 ([official page](https://gery.casiez.net/1euro/)).
