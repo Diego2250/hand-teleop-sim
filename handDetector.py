@@ -58,10 +58,15 @@ def palm_scale(landmarks, world, w, h):
         best = max(best, img / real)
     return best / h
 
+def pinch(world):
+    """Distancia pulgar-índice (puntas, landmarks 4 y 8) en metros; con world landmarks no depende de la cámara."""
+    thumb, index = world[4], world[8]
+    return math.dist((thumb.x, thumb.y, thumb.z), (index.x, index.y, index.z))
+
 def hand_msg(landmarks, world, ts, w, h):
     palm, wrist = landmarks[9], landmarks[0]
     scale = math.hypot(palm.x - wrist.x, palm.y - wrist.y)
-    return {"u": palm.x, "v": palm.y, "s": scale, "d": palm_scale(landmarks, world, w, h), "ts": ts}
+    return {"u": palm.x, "v": palm.y, "s": scale, "d": palm_scale(landmarks, world, w, h), "p": pinch(world), "ts": ts}
 
 def send_hand(landmarks, world, ts, w, h):
     sock.sendto(json.dumps(hand_msg(landmarks, world, ts, w, h)).encode(), UDP_ADDR)
