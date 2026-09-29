@@ -3,7 +3,7 @@
 Teleoperating simulated robot arms in MuJoCo with a webcam hand tracker, and a small controlled
 experiment on which smoothing filter gives the best trade-off between tremor and responsiveness.
 
-[![Demo video: the simulated Franka Panda and Shadow Hand copying the operator's hand and fingers](results/demo_thumbnail.jpg)](results/demo.mp4)
+[![Demo video: the simulated Franka Panda and Shadow Hand copying the operator's hand and fingers](results/demo_thumbnail.jpg)](https://youtu.be/K39lfkHB9XA)
 
 *Demo, 18 s (click to open the video): the webcam with the MediaPipe landmarks on top, and the simulated
 Franka Panda with a Shadow Hand below, following the hand and copying open hand, fist, pinch and pointing.*
